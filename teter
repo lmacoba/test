@@ -1,0 +1,53 @@
+   - name: Target server is not SQL server
+      ansible.builtin.assert:
+        that: coria | ansible.builtin.intersect(_sql_coria) | length == 0
+        fail_msg: >-
+          The target server is an SQL server.
+          SQL Servers are NOT allowed to be moved from SQL OU.
+        success_msg: "The target server is not SQL server, OK to proceed."
+
+    - name: Convert OU name to Coria format
+      when: _coria_ou is defined
+      ansible.builtin.set_fact:
+        _coria_new: '{{ _coria_ou | commerzbank.general.coria }}'
+
+    - name: The server has proper Coria assigned.
+      when: _coria_ou is defined
+      ansible.builtin.assert:
+        that: _coria_new in coria
+        fail_msg: >-
+          The target server does not have {{ _coria_new }} assigned and cant be moved to
+          {{ _coria_ou }} OU.
+        success_msg: "The target server has proper Coria assigned, OK to proceed."
+
+    - name: Check if target OU exists in AD.
+      community.windows.win_domain_object_info:
+        identity: '{{ target_ou }}'
+        domain_username: "{{ _domain_credentials.user }}"
+        domain_password: "{{ _domain_credentials.password }}"
+      delegate_to: "{{ _helper_server }}"
+      register: domain_info
+      ignore_errors: true
+
+    - name: Assert that {{ target_ou }} exists in AD.
+      ansible.builtin.assert:
+        that:
+          - domain_info.failed == false
+          - domain_info.objects[0].DistinguishedName | lower == target_ou | lower
+
+        success_msg: '{{ target_ou }} exists in AD.'
+        fail_msg: 'Failed to find {{ target_ou }} in AD! Please check manually.'
+
+    - name: Move the server to {{ target_ou }}
+      community.windows.win_domain_computer:
+        dns_hostname: '{{ inventory_hostname }}'
+        domain_username: "{{ _domain_credentials.user }}"
+        domain_password: "{{ _domain_credentials.password }}"
+        name: '{{ inventory_hostname_short }}'
+        ou: '{{ target_ou }}'
+        state: present
+      delegate_to: "{{ _helper_server }}"
+
+    - name: Perform GPO update.
+      ansible.windows.win_command:
+        cmd: gpupdate /force
